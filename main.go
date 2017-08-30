@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	extensionsv1 "k8s.io/api/extensions/v1beta1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/apis/meta/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -34,7 +36,7 @@ func main() {
 	for {
 
 		// nodes
-		nodes, err := clientSet.Nodes().List(v1.ListOptions{})
+		nodes, err := clientSet.Nodes().List(metav1.ListOptions{})
 		if err != nil {
 			fmt.Println("Node list error: ", err.Error())
 		}
@@ -46,9 +48,9 @@ func main() {
 		}
 
 		// deployments
-		deploymentClient := clientSet.AppsV1beta1().Deployments(v1.NamespaceDefault)
+		deploymentClient := clientSet.AppsV1beta1().Deployments(metav1.NamespaceDefault)
 
-		deployments, err := deploymentClient.List(v1.ListOptions{})
+		deployments, err := deploymentClient.List(metav1.ListOptions{})
 		if err != nil {
 			fmt.Println("Deployment list error: ", err.Error())
 		}
@@ -58,9 +60,9 @@ func main() {
 		}
 
 		// replicasets
-		replicaSetClient := clientSet.ExtensionsV1beta1Client.ReplicaSets(v1.NamespaceDefault)
+		replicaSetClient := clientSet.ExtensionsV1beta1Client.ReplicaSets(metav1.NamespaceDefault)
 
-		rsList, err := replicaSetClient.List(v1.ListOptions{})
+		rsList, err := replicaSetClient.List(metav1.ListOptions{})
 		if err != nil {
 			fmt.Println("ReplicateSet list error: ", err.Error())
 		}
@@ -70,16 +72,15 @@ func main() {
 		}
 
 		// pods
-		podClient := clientSet.CoreV1().Pods(v1.NamespaceDefault)
+		podClient := clientSet.CoreV1().Pods(metav1.NamespaceDefault)
 
-		pods, err := podClient.List(v1.ListOptions{})
+		pods, err := podClient.List(metav1.ListOptions{})
 		if err != nil {
 			panic(err.Error())
 		}
 		fmt.Printf("There are %d pods in the cluster\n", len(pods.Items))
 
-
-		_, err = clientSet.CoreV1().Pods(v1.NamespaceDefault).Get("cloudbreak-1690346111-5h5g9", v1.GetOptions{})
+		_, err = clientSet.CoreV1().Pods(metav1.NamespaceDefault).Get("cloudbreak-1690346111-5h5g9", metav1.GetOptions{})
 		if errors.IsNotFound(err) {
 			fmt.Printf("Pod not found\n")
 		} else if statusError, isStatus := err.(*errors.StatusError); isStatus {
@@ -92,6 +93,10 @@ func main() {
 
 		time.Sleep(10 * time.Second)
 	}
+}
+
+func getPodsForReplicaSet(pods []corev1.Pod, replicaset extensionsv1.ReplicaSet) (result []corev1.Pod) {
+	return nil
 }
 
 func homeDir() string {
