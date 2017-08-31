@@ -46,7 +46,8 @@ func main() {
 		var podsPerNode = make(map[string][]corev1.Pod)
 		var allPods = make([]corev1.Pod, 0)
 		for _, node := range nodes.Items {
-			if !node.Spec.Unschedulable {
+			// ignore tainted nodes for now..
+			if !node.Spec.Unschedulable && len(node.Spec.Taints) == 0 {
 				pods := listPodsOnNode(podClient.List, node)
 				podsPerNode[node.Name] = pods
 				allPods = append(allPods, pods...)
@@ -56,10 +57,19 @@ func main() {
 		podGroups := groupPods(allPods)
 		for group, pods := range podGroups {
 			if movablePod := findMovablePod(pods); movablePod != nil {
+				log.Infof("Find node candidate for Pod: %s", movablePod.Name)
 				if node := findNodeForPod(podsPerNode, group, nodes.Items); node != nil {
-					log.Infof("Attempting to move Pod (%s) to node %s", movablePod.Name, node.Name)
-
+					// consider Taints and Tolerations to make sure it gets scheduled to the desired node
+					log.Infof("Delete Pod (%s) in order to reschedule it to another node", movablePod.Name)
+					err := podClient.Delete(movablePod.Name, &metav1.DeleteOptions{})
+					if err != nil {
+						log.Errorf("Failed to delete Pod: %s, error: %s", movablePod.Name, err.Error())
+					}
+				} else {
+					log.Infof("There is no node candidate to move the Pod (%s) to", movablePod.Name)
 				}
+			} else {
+				log.Infof("No action required for Pod group: %s", group)
 			}
 		}
 
@@ -88,7 +98,7 @@ func findMovablePod(pods []corev1.Pod) *corev1.Pod {
 		if pod.Status.Phase == corev1.PodRunning {
 			node := pod.Spec.NodeName
 			if len(podsByNode[node]) == 1 {
-				log.Infof("Pod: %s can be moved as there is another running pod (%s) on the same node: %s", pod.Name, podsByNode[node][0].Name, node)
+				log.Infof("Pod: %s can be rescheduled as there is another running pod (%s) on the same node: %s", pod.Name, podsByNode[node][0].Name, node)
 				return &pod
 			}
 			podsByNode[node] = append(podsByNode[node], pod)
@@ -99,7 +109,6 @@ func findMovablePod(pods []corev1.Pod) *corev1.Pod {
 
 // Find a node which does not run any Pod from one Deployment/StatefulSet
 func findNodeForPod(podsPerNode map[string][]corev1.Pod, group string, nodes []corev1.Node) *corev1.Node {
-	log.Infof("Find node for Pod group: %s", group)
 	for node, pods := range podsPerNode {
 		podFoundForGroup := false
 		for _, pod := range pods {
@@ -110,7 +119,7 @@ func findNodeForPod(podsPerNode map[string][]corev1.Pod, group string, nodes []c
 			}
 		}
 		if !podFoundForGroup {
-			log.Infof("Foud node: %s for Pod group: %s", node, group)
+			log.Infof("Found node: %s for Pod group: %s", node, group)
 			return findNode(node, nodes)
 		}
 	}
