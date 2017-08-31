@@ -17,6 +17,12 @@
 			"revisionTime": "2017-07-29T13:44:51Z"
 		},
 		{
+			"checksumSHA1": "YTUuA+ruA8VQltUspDGhxf3Pn9o=",
+			"path": "github.com/Sirupsen/logrus",
+			"revision": "f92b7950b372b1db80bd3527e4d40e42555fe6c2",
+			"revisionTime": "2014-11-06T16:24:30Z"
+		},
+		{
 			"checksumSHA1": "7UT+dVVfOn8IA79ITFiGNMb2c/4=",
 			"origin": "k8s.io/apimachinery/vendor/github.com/davecgh/go-spew/spew",
 			"path": "github.com/davecgh/go-spew/spew",
