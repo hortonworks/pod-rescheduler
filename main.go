@@ -8,9 +8,8 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	extensionsv1 "k8s.io/api/extensions/v1beta1"
-	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -33,70 +32,110 @@ func main() {
 	if err != nil {
 		panic(err.Error())
 	}
-	for {
 
+	podClient := clientSet.CoreV1().Pods(metav1.NamespaceDefault)
+	nodeClient := clientSet.Nodes()
+
+	for {
 		// nodes
-		nodes, err := clientSet.Nodes().List(metav1.ListOptions{})
+		nodes, err := nodeClient.List(metav1.ListOptions{})
 		if err != nil {
 			fmt.Println("Node list error: ", err.Error())
+			continue
 		}
-		fmt.Println("The following nodes are schedulable:")
+
+		var podsPerNode = make(map[string][]corev1.Pod)
+		var allPods = make([]corev1.Pod, 0)
 		for _, node := range nodes.Items {
 			if !node.Spec.Unschedulable {
-				fmt.Println("Name:", node.GetName())
+				pods := listPodsOnNode(podClient.List, node)
+				podsPerNode[node.Name] = pods
+				allPods = append(allPods, pods...)
 			}
 		}
 
-		// deployments
-		deploymentClient := clientSet.AppsV1beta1().Deployments(metav1.NamespaceDefault)
+		podGroups := groupPods(allPods)
+		for group, pods := range podGroups {
+			if movablePod := findMovablePod(pods); movablePod != nil {
+				if node := findNodeForPod(podsPerNode, group, nodes.Items); node != nil {
+					fmt.Printf("Attempting to move Pod (%s) to node %s\n", movablePod.Name, node.Name)
 
-		deployments, err := deploymentClient.List(metav1.ListOptions{})
-		if err != nil {
-			fmt.Println("Deployment list error: ", err.Error())
-		}
-		fmt.Println("Deployment list:")
-		for _, deployment := range deployments.Items {
-			fmt.Println("Name:", deployment.GetName())
-		}
 
-		// replicasets
-		replicaSetClient := clientSet.ExtensionsV1beta1Client.ReplicaSets(metav1.NamespaceDefault)
-
-		rsList, err := replicaSetClient.List(metav1.ListOptions{})
-		if err != nil {
-			fmt.Println("ReplicateSet list error: ", err.Error())
-		}
-		fmt.Println("ReplicateSet list:")
-		for _, rs := range rsList.Items {
-			fmt.Println("Name:", rs.Name)
-		}
-
-		// pods
-		podClient := clientSet.CoreV1().Pods(metav1.NamespaceDefault)
-
-		pods, err := podClient.List(metav1.ListOptions{})
-		if err != nil {
-			panic(err.Error())
-		}
-		fmt.Printf("There are %d pods in the cluster\n", len(pods.Items))
-
-		_, err = clientSet.CoreV1().Pods(metav1.NamespaceDefault).Get("cloudbreak-1690346111-5h5g9", metav1.GetOptions{})
-		if errors.IsNotFound(err) {
-			fmt.Printf("Pod not found\n")
-		} else if statusError, isStatus := err.(*errors.StatusError); isStatus {
-			fmt.Printf("Error getting pod %v\n", statusError.ErrStatus.Message)
-		} else if err != nil {
-			panic(err.Error())
-		} else {
-			fmt.Printf("Found pod\n")
+				}
+			}
 		}
 
 		time.Sleep(10 * time.Second)
 	}
 }
 
-func getPodsForReplicaSet(pods []corev1.Pod, replicaset extensionsv1.ReplicaSet) (result []corev1.Pod) {
+// Group the Pods that belong to the same Deployment/StatefulSet
+func groupPods(pods []corev1.Pod) (result map[string][]corev1.Pod) {
+	result = make(map[string][]corev1.Pod)
+	for _, pod := range pods {
+		groupName := getPodGroupName(pod)
+		result[groupName] = append(result[groupName], pod)
+	}
+	return result
+}
+
+func getPodGroupName(pod corev1.Pod) string {
+	return pod.GenerateName[0 : len(pod.GenerateName)-1]
+}
+
+// Find a Pod which has an alternative Running Pod on the same node
+func findMovablePod(pods []corev1.Pod) *corev1.Pod {
+	var podsByNode = make(map[string][]corev1.Pod)
+	for _, pod := range pods {
+		if pod.Status.Phase == corev1.PodRunning {
+			node := pod.Spec.NodeName
+			if len(podsByNode[node]) == 1 {
+				fmt.Printf("Pod: %s can be moved as there is another running pod (%s) on the same node: %s\n", pod.Name, podsByNode[node][0].Name, node)
+				return &pod
+			}
+			podsByNode[node] = append(podsByNode[node], pod)
+		}
+	}
 	return nil
+}
+
+// Find a node which does not run any Pod from one Deployment/StatefulSet
+func findNodeForPod(podsPerNode map[string][]corev1.Pod, group string, nodes []corev1.Node) *corev1.Node {
+	fmt.Println("Find node for Pod group:", group)
+	for node, pods := range podsPerNode {
+		podFoundForGroup := false
+		for _, pod := range pods {
+			if getPodGroupName(pod) == group {
+				fmt.Printf("Found Pod group(%s) on node: %s, searching..\n", group, node)
+				podFoundForGroup = true
+				break
+			}
+		}
+		if !podFoundForGroup {
+			fmt.Printf("Foud node: %s for Pod group: %s\n", node, group)
+			return findNode(node, nodes)
+		}
+	}
+	return nil
+}
+
+func findNode(name string, nodes []corev1.Node) *corev1.Node {
+	for _, node := range nodes {
+		if node.Name == name {
+			return &node
+		}
+	}
+	return nil
+}
+
+func listPodsOnNode(ListPodsOnNode func(opts metav1.ListOptions) (*corev1.PodList, error), node corev1.Node) []corev1.Pod {
+	fmt.Println("List Pods on node:", node.Name)
+	podsOnNode, err := ListPodsOnNode(metav1.ListOptions{FieldSelector: fields.SelectorFromSet(fields.Set{"spec.nodeName": node.Name}).String()})
+	if err != nil {
+		fmt.Println("Failed to list Pods on node:", node.Name)
+		return nil
+	}
+	return podsOnNode.Items
 }
 
 func homeDir() string {
