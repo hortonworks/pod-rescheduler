@@ -15,7 +15,13 @@ import (
 	"text/tabwriter"
 )
 
+var (
+	housekeepingInterval = flag.Duration("housekeeping-interval", 10*time.Second, `How often rescheduler takes actions.`)
+	namespace            = flag.String("namespace", metav1.NamespaceDefault, `Namespace to watch for Pods.`)
+)
+
 func main() {
+	log.Infof("Started pod-rescheduler application")
 	var kubeconfig *string
 	if home := homeDir(); home != "" {
 		kubeconfig = flag.String("kubeconfig", filepath.Join(home, ".kube", "config"), "(optional) absolute path to the kubeconfig file")
@@ -34,49 +40,52 @@ func main() {
 		panic(err.Error())
 	}
 
-	podClient := clientSet.CoreV1().Pods(metav1.NamespaceDefault)
+	podClient := clientSet.CoreV1().Pods(*namespace)
 	nodeClient := clientSet.Nodes()
 
 	tabWriter := tabwriter.NewWriter(os.Stdout, 0, 0, 1, '.', tabwriter.Debug)
 	log.SetOutput(tabWriter)
 
 	for {
-		time.Sleep(10 * time.Second)
-
-		nodes, err := nodeClient.List(metav1.ListOptions{})
-		if err != nil {
-			log.Errorf("Node list error: %s", err.Error())
-			continue
-		}
-
-		var podsPerNode = make(map[string][]corev1.Pod)
-		var allPods = make([]corev1.Pod, 0)
-		for _, node := range nodes.Items {
-			// ignore tainted nodes for now..
-			if !node.Spec.Unschedulable && len(node.Spec.Taints) == 0 {
-				pods := listPodsOnNode(podClient.List, node)
-				podsPerNode[node.Name] = pods
-				allPods = append(allPods, pods...)
-			}
-		}
-
-		podGroups := groupPods(allPods)
-		logPods(podGroups)
-		for group, pods := range podGroups {
-			if movablePod := findMovablePod(pods); movablePod != nil {
-				log.Infof("Find node candidate for Pod: %s", movablePod.Name)
-				if node := findNodeForPod(podsPerNode, group, nodes.Items); node != nil {
-					// consider Taints and Tolerations to make sure it gets scheduled to the desired node
-					log.Infof("Delete Pod (%s) in order to reschedule it to another node", movablePod.Name)
-					err := podClient.Delete(movablePod.Name, &metav1.DeleteOptions{})
-					if err != nil {
-						log.Errorf("Failed to delete Pod: %s, error: %s", movablePod.Name, err.Error())
-					}
-				} else {
-					log.Infof("There is no node candidate to move the Pod (%s) to", movablePod.Name)
+		select {
+		case <-time.After(*housekeepingInterval):
+			{
+				nodes, err := nodeClient.List(metav1.ListOptions{})
+				if err != nil {
+					log.Errorf("Node list error: %s", err.Error())
+					continue
 				}
-			} else {
-				log.Infof("No action required for Pod group: %s", group)
+
+				var podsPerNode = make(map[string][]corev1.Pod)
+				var allPods = make([]corev1.Pod, 0)
+				for _, node := range nodes.Items {
+					// ignore tainted nodes for now..
+					if !node.Spec.Unschedulable && len(node.Spec.Taints) == 0 {
+						pods := listPodsOnNode(podClient.List, node)
+						podsPerNode[node.Name] = pods
+						allPods = append(allPods, pods...)
+					}
+				}
+
+				podGroups := groupPods(allPods)
+				logPods(podGroups)
+				for group, pods := range podGroups {
+					if movablePod := findMovablePod(pods); movablePod != nil {
+						log.Infof("Find node candidate for Pod: %s", movablePod.Name)
+						if node := findNodeForPod(podsPerNode, group, nodes.Items); node != nil {
+							// consider Taints and Tolerations to make sure it gets scheduled to the desired node
+							log.Infof("Delete Pod (%s) in order to reschedule it to another node", movablePod.Name)
+							err := podClient.Delete(movablePod.Name, &metav1.DeleteOptions{})
+							if err != nil {
+								log.Errorf("Failed to delete Pod: %s, error: %s", movablePod.Name, err.Error())
+							}
+						} else {
+							log.Infof("There is no node candidate to move the Pod (%s) to", movablePod.Name)
+						}
+					} else {
+						log.Infof("No action required for Pod group: %s", group)
+					}
+				}
 			}
 		}
 	}
