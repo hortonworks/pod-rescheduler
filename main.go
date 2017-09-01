@@ -11,34 +11,48 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"text/tabwriter"
 )
 
 var (
+	Version              string
+	BuildTime            string
 	housekeepingInterval = flag.Duration("housekeeping-interval", 10*time.Second, `How often rescheduler takes actions.`)
 	namespace            = flag.String("namespace", metav1.NamespaceDefault, `Namespace to watch for Pods.`)
 )
 
 func main() {
-	log.Infof("Started pod-rescheduler application")
-	var kubeconfig *string
-	if home := homeDir(); home != "" {
-		kubeconfig = flag.String("kubeconfig", filepath.Join(home, ".kube", "config"), "(optional) absolute path to the kubeconfig file")
-	} else {
-		kubeconfig = flag.String("kubeconfig", "", "absolute path to the kubeconfig file")
+	log.Infof("Started pod-rescheduler application %s-%s", Version, BuildTime)
+	log.Info("Namespace: ", *namespace)
+	log.Info("Housekeeping interval: ", housekeepingInterval)
+
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		log.Warnf("Cannot use service account (/var/run/secrets/kubernetes.io/serviceaccount/" +
+			corev1.ServiceAccountRootCAKey + ") trying to connect with kube config file..")
+	}
+
+	if config == nil {
+		var kubeconfig *string
+		if home := homeDir(); home != "" {
+			kubeconfig = flag.String("kubeconfig", filepath.Join(home, ".kube", "config"), "(optional) absolute path to the kubeconfig file")
+		} else {
+			kubeconfig = flag.String("kubeconfig", "", "absolute path to the kubeconfig file")
+		}
+		config, err = clientcmd.BuildConfigFromFlags("", *kubeconfig)
+		if err != nil {
+			panic(err.Error())
+		}
 	}
 	flag.Parse()
-
-	config, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
-	if err != nil {
-		panic(err.Error())
-	}
 
 	clientSet, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		panic(err.Error())
 	}
+	log.Info("Kubernetes client initialized")
 
 	podClient := clientSet.CoreV1().Pods(*namespace)
 	nodeClient := clientSet.Nodes()
