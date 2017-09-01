@@ -7,6 +7,7 @@ import (
 	"time"
 
 	log "github.com/Sirupsen/logrus"
+	logformat "github.com/hortonworks/pod-rescheduler/log"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
@@ -24,6 +25,9 @@ var (
 )
 
 func main() {
+	formatter := &logformat.TimeFormatter{}
+	log.SetFormatter(formatter)
+
 	log.Infof("Started pod-rescheduler application %s-%s", Version, BuildTime)
 	log.Info("Namespace: ", *namespace)
 	log.Info("Housekeeping interval: ", housekeepingInterval)
@@ -31,7 +35,7 @@ func main() {
 	config, err := rest.InClusterConfig()
 	if err != nil {
 		log.Warnf("Cannot use service account (/var/run/secrets/kubernetes.io/serviceaccount/" +
-			corev1.ServiceAccountRootCAKey + ") trying to connect with kube config file..")
+			corev1.ServiceAccountTokenKey + ") trying to connect with kube config file..")
 	}
 
 	if config == nil {
@@ -41,6 +45,7 @@ func main() {
 		} else {
 			kubeconfig = flag.String("kubeconfig", "", "absolute path to the kubeconfig file")
 		}
+		log.Infof("Use kube config: %s", *kubeconfig)
 		config, err = clientcmd.BuildConfigFromFlags("", *kubeconfig)
 		if err != nil {
 			panic(err.Error())
