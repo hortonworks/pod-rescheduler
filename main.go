@@ -118,17 +118,25 @@ func logPods(podGroups map[string][]corev1.Pod) {
 }
 
 // Group the Pods that belong to the same Deployment/StatefulSet
+// Single Pods are ignored
 func groupPods(pods []corev1.Pod) (result map[string][]corev1.Pod) {
 	result = make(map[string][]corev1.Pod)
 	for _, pod := range pods {
 		groupName := getPodGroupName(pod)
-		result[groupName] = append(result[groupName], pod)
+		if groupName != nil {
+			result[*groupName] = append(result[*groupName], pod)
+		}
 	}
 	return result
 }
 
-func getPodGroupName(pod corev1.Pod) string {
-	return pod.GenerateName[0 : len(pod.GenerateName)-1]
+func getPodGroupName(pod corev1.Pod) *string {
+	generateName := pod.GenerateName
+	if len(generateName) > 0 {
+		generateName = generateName[0 : len(generateName)-1]
+		return &generateName
+	}
+	return nil
 }
 
 // Find a Pod which has an alternative Running Pod on the same node
@@ -160,7 +168,8 @@ func findNodeForPod(podsPerNode map[string][]corev1.Pod, group string, nodes []c
 	for node, pods := range podsPerNode {
 		podFoundForGroup := false
 		for _, pod := range pods {
-			if getPodGroupName(pod) == group {
+			groupName := getPodGroupName(pod)
+			if groupName != nil && *groupName == group {
 				log.Infof("Found Pod group(%s) on node: %s, searching..", group, node)
 				podFoundForGroup = true
 				break
