@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
+	"text/tabwriter"
 )
 
 func main() {
@@ -36,10 +37,15 @@ func main() {
 	podClient := clientSet.CoreV1().Pods(metav1.NamespaceDefault)
 	nodeClient := clientSet.Nodes()
 
+	tabWriter := tabwriter.NewWriter(os.Stdout, 0, 0, 1, '.', tabwriter.Debug)
+	log.SetOutput(tabWriter)
+
 	for {
+		time.Sleep(10 * time.Second)
+
 		nodes, err := nodeClient.List(metav1.ListOptions{})
 		if err != nil {
-			log.Infof("Node list error: %s", err.Error())
+			log.Errorf("Node list error: %s", err.Error())
 			continue
 		}
 
@@ -55,6 +61,7 @@ func main() {
 		}
 
 		podGroups := groupPods(allPods)
+		logPods(podGroups)
 		for group, pods := range podGroups {
 			if movablePod := findMovablePod(pods); movablePod != nil {
 				log.Infof("Find node candidate for Pod: %s", movablePod.Name)
@@ -72,8 +79,13 @@ func main() {
 				log.Infof("No action required for Pod group: %s", group)
 			}
 		}
-
-		time.Sleep(10 * time.Second)
+	}
+}
+func logPods(podGroups map[string][]corev1.Pod) {
+	for _, pods := range podGroups {
+		for _, pod := range pods {
+			log.Infof("%s\t%s\t%s\t%s", pod.Name, pod.Status.Phase, pod.Status.PodIP, pod.Spec.NodeName)
+		}
 	}
 }
 
@@ -95,10 +107,18 @@ func getPodGroupName(pod corev1.Pod) string {
 func findMovablePod(pods []corev1.Pod) *corev1.Pod {
 	var podsByNode = make(map[string][]corev1.Pod)
 	for _, pod := range pods {
-		if pod.Status.Phase == corev1.PodRunning {
+		containerStatuses := pod.Status.ContainerStatuses
+		if pod.Status.Phase == corev1.PodRunning && len(containerStatuses) > 0 {
+			podName := pod.Name
+			for _, cStatus := range containerStatuses {
+				if !cStatus.Ready {
+					log.Infof("Pod (%s) is running, but it's container (%s) is not ready", podName, cStatus.Name)
+					continue
+				}
+			}
 			node := pod.Spec.NodeName
 			if len(podsByNode[node]) == 1 {
-				log.Infof("Pod: %s can be rescheduled as there is another running pod (%s) on the same node: %s", pod.Name, podsByNode[node][0].Name, node)
+				log.Infof("Pod: %s can be rescheduled as there is another running and ready pod (%s) on the same node: %s", podName, podsByNode[node][0].Name, node)
 				return &pod
 			}
 			podsByNode[node] = append(podsByNode[node], pod)
@@ -107,7 +127,7 @@ func findMovablePod(pods []corev1.Pod) *corev1.Pod {
 	return nil
 }
 
-// Find a node which does not run any Pod from one Deployment/StatefulSet
+// Find a node which does not run any Pod from the same Deployment/StatefulSet
 func findNodeForPod(podsPerNode map[string][]corev1.Pod, group string, nodes []corev1.Node) *corev1.Node {
 	for node, pods := range podsPerNode {
 		podFoundForGroup := false
@@ -139,7 +159,7 @@ func listPodsOnNode(ListPodsOnNode func(opts metav1.ListOptions) (*corev1.PodLis
 	log.Infof("List Pods on node: %s", node.Name)
 	podsOnNode, err := ListPodsOnNode(metav1.ListOptions{FieldSelector: fields.SelectorFromSet(fields.Set{"spec.nodeName": node.Name}).String()})
 	if err != nil {
-		log.Infof("Failed to list Pods on node: %s", node.Name)
+		log.Errorf("Failed to list Pods on node: %s", node.Name)
 		return nil
 	}
 	return podsOnNode.Items
