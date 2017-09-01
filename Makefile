@@ -1,6 +1,6 @@
 BINARY=pod-rescheduler
 
-VERSION=0.1.2
+VERSION=0.1.3
 BUILD_TIME=$(shell date +%FT%T)
 LDFLAGS=-ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME}"
 GOFILES_NOVENDOR = $(shell find . -type f -name '*.go' -not -path "./vendor/*")

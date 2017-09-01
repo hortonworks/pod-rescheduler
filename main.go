@@ -142,6 +142,7 @@ func getPodGroupName(pod corev1.Pod) *string {
 // Find a Pod which has an alternative Running Pod on the same node
 func findMovablePod(pods []corev1.Pod) *corev1.Pod {
 	var podsByNode = make(map[string][]corev1.Pod)
+podLoop:
 	for _, pod := range pods {
 		containerStatuses := pod.Status.ContainerStatuses
 		if pod.Status.Phase == corev1.PodRunning && len(containerStatuses) > 0 {
@@ -149,7 +150,7 @@ func findMovablePod(pods []corev1.Pod) *corev1.Pod {
 			for _, cStatus := range containerStatuses {
 				if !cStatus.Ready {
 					log.Infof("Pod (%s) is running, but it's container (%s) is not ready", podName, cStatus.Name)
-					continue
+					continue podLoop
 				}
 			}
 			node := pod.Spec.NodeName
