@@ -22,6 +22,7 @@ var (
 	BuildTime            string
 	housekeepingInterval = flag.Duration("housekeeping-interval", 10*time.Second, `How often rescheduler takes actions.`)
 	namespace            = flag.String("namespace", metav1.NamespaceDefault, `Namespace to watch for Pods.`)
+	minReplica           = flag.Int("min-replica-count", 2, "Minimum number or replicas that a replica set or replication controller should have to allow their pods deletion in scale down")
 )
 
 func main() {
@@ -29,8 +30,6 @@ func main() {
 	log.SetFormatter(formatter)
 
 	log.Infof("Started pod-rescheduler application %s-%s", Version, BuildTime)
-	log.Info("Namespace: ", *namespace)
-	log.Info("Housekeeping interval: ", housekeepingInterval)
 
 	config, err := rest.InClusterConfig()
 	if err != nil {
@@ -58,6 +57,9 @@ func main() {
 		panic(err.Error())
 	}
 	log.Info("Kubernetes client initialized")
+	log.Info("Namespace: ", *namespace)
+	log.Info("Housekeeping interval: ", housekeepingInterval)
+	log.Info("Minimum replica count: ", *minReplica)
 
 	podClient := clientSet.CoreV1().Pods(*namespace)
 	nodeClient := clientSet.Nodes()
@@ -142,24 +144,33 @@ func getPodGroupName(pod corev1.Pod) *string {
 // Find a Pod which has an alternative Running Pod on the same node
 func findMovablePod(pods []corev1.Pod) *corev1.Pod {
 	var podsByNode = make(map[string][]corev1.Pod)
-podLoop:
+	var podCandidate *corev1.Pod = nil
+	podCount := 0
 	for _, pod := range pods {
 		containerStatuses := pod.Status.ContainerStatuses
 		if pod.Status.Phase == corev1.PodRunning && len(containerStatuses) > 0 {
 			podName := pod.Name
+			ready := true
 			for _, cStatus := range containerStatuses {
 				if !cStatus.Ready {
 					log.Infof("Pod (%s) is running, but it's container (%s) is not ready", podName, cStatus.Name)
-					continue podLoop
+					ready = false
+					break
 				}
 			}
-			node := pod.Spec.NodeName
-			if len(podsByNode[node]) == 1 {
-				log.Infof("Pod: %s can be rescheduled as there is another running and ready pod (%s) on the same node: %s", podName, podsByNode[node][0].Name, node)
-				return &pod
+			if ready {
+				node := pod.Spec.NodeName
+				if len(podsByNode[node]) == 1 {
+					log.Infof("Pod: %s can be rescheduled as there is another running and ready pod (%s) on the same node: %s", podName, podsByNode[node][0].Name, node)
+					podCandidate = &pod
+				}
+				podsByNode[node] = append(podsByNode[node], pod)
+				podCount++
 			}
-			podsByNode[node] = append(podsByNode[node], pod)
 		}
+	}
+	if podCount >= *minReplica {
+		return podCandidate
 	}
 	return nil
 }
