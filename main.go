@@ -71,8 +71,6 @@ func main() {
 	tabWriter := tabwriter.NewWriter(os.Stdout, 0, 0, 1, '.', tabwriter.Debug)
 	log.SetOutput(tabWriter)
 
-	podsBeingProcessed := utils.NewPodSet()
-
 	for {
 		select {
 		case <-time.After(*housekeepingInterval):
@@ -105,9 +103,6 @@ func main() {
 							err := podClient.Delete(pod.Name, &metav1.DeleteOptions{})
 							if err != nil {
 								log.Errorf("Failed to delete Pod: %s, error: %s", pod.Name, err.Error())
-							} else {
-								podsBeingProcessed.Add(pod)
-								go waitForPodReadiness(podClient.Get, podsBeingProcessed, pod)
 							}
 						} else {
 							log.Infof("There is no node candidate to move the Pod (%s) to", pod.Name)
@@ -134,7 +129,7 @@ func logPods(podGroups map[string][]corev1.Pod) {
 func groupPods(pods []corev1.Pod) (result map[string][]corev1.Pod) {
 	result = make(map[string][]corev1.Pod)
 	for _, pod := range pods {
-		groupName := getPodGroupName(pod)
+		groupName := utils.GetPodGroupName(&pod)
 		if groupName != nil {
 			result[*groupName] = append(result[*groupName], pod)
 		}
@@ -142,30 +137,20 @@ func groupPods(pods []corev1.Pod) (result map[string][]corev1.Pod) {
 	return result
 }
 
-func getPodGroupName(pod corev1.Pod) *string {
-	generateName := pod.GenerateName
-	if len(generateName) > 0 {
-		generateName = generateName[0 : len(generateName)-1]
-		return &generateName
-	}
-	return nil
-}
-
 // Find a Pod which has an alternative Running and Ready Pod on the same node
 // Pods can be moved only when the minimum replica count is met
-// TODO: account already in progress scheduling when finding a candidate
 func findMovablePod(pods []corev1.Pod) *corev1.Pod {
 	var podsByNode = make(map[string][]corev1.Pod)
-	var podCandidate *corev1.Pod = nil
+	var podCandidate *corev1.Pod
 	podCount := 0
-	for _, pod := range pods {
+	for i, pod := range pods {
 		containerStatuses := pod.Status.ContainerStatuses
 		if pod.Status.Phase == corev1.PodRunning && len(containerStatuses) > 0 {
 			if isPodReady(&pod) {
 				node := pod.Spec.NodeName
 				if len(podsByNode[node]) == 1 {
 					log.Infof("Pod: %s can be rescheduled as there is another running and ready pod (%s) on the same node: %s", pod.Name, podsByNode[node][0].Name, node)
-					podCandidate = &pod
+					podCandidate = &pods[i]
 				}
 				podsByNode[node] = append(podsByNode[node], pod)
 				podCount++
@@ -193,7 +178,7 @@ func findNodeForPod(podsPerNode map[string][]corev1.Pod, group string, nodes []c
 	for nodeName, pods := range podsPerNode {
 		podFoundForGroup := false
 		for _, pod := range pods {
-			groupName := getPodGroupName(pod)
+			groupName := utils.GetPodGroupName(&pod)
 			if groupName != nil && *groupName == group {
 				log.Infof("Found Pod group(%s) on node: %s, searching..", group, nodeName)
 				podFoundForGroup = true
@@ -236,7 +221,7 @@ func homeDir() string {
 
 func waitForPodReadiness(getPod func(name string, options metav1.GetOptions) (*corev1.Pod, error), podsBeingProcessed *utils.PodSet, pod *corev1.Pod) {
 	podName := pod.Name
-	log.Infof("Waiting for pod %s to be scheduled: %s", podName)
+	log.Infof("Waiting for pod %s to be scheduled", podName)
 	err := wait.Poll(2*time.Second, *podSchedulingTimeout, func() (bool, error) {
 		actualPod, err := getPod(pod.Name, metav1.GetOptions{})
 		if err != nil {

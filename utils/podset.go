@@ -1,19 +1,18 @@
 package utils
 
 import (
-	"sync"
-
 	corev1 "k8s.io/api/core/v1"
+	"sync"
 )
 
 type PodSet struct {
-	set   map[string]struct{}
+	set   map[string]*corev1.Pod
 	mutex sync.Mutex
 }
 
 func NewPodSet() *PodSet {
 	return &PodSet{
-		set:   make(map[string]struct{}),
+		set:   make(map[string]*corev1.Pod),
 		mutex: sync.Mutex{},
 	}
 }
@@ -21,13 +20,28 @@ func NewPodSet() *PodSet {
 func (s *PodSet) Add(pod *corev1.Pod) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	s.set[podId(pod)] = struct{}{}
+	s.set[podId(pod)] = pod
 }
 
 func (s *PodSet) Remove(pod *corev1.Pod) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	delete(s.set, podId(pod))
+}
+
+func (s *PodSet) HasGroup(pod *corev1.Pod) bool {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	if podGroup := GetPodGroupName(pod); podGroup != nil {
+		for _, pod := range s.set {
+			if groupName := GetPodGroupName(pod); groupName != nil {
+				if *podGroup == *groupName {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func (s *PodSet) Has(pod *corev1.Pod) bool {
